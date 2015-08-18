@@ -1,23 +1,97 @@
 #!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir>
 
 set -e
 
-mkdir -p "$1/bin/"
-cp "bin/nginx-$STACK" "$1/bin/nginx"
-nginx_version=$(./bin/nginx-$STACK -V 2>&1 | head -1 | awk '{ print $NF }')
-echo "-----> nginx-buildpack: Installed ${nginx_version} to app/bin"
-cp bin/start-nginx "$1/bin/"
-echo '-----> nginx-buildpack: Added start-nginx to app/bin'
+NGINX_VERSION="1.8.0"
+NGINX_SOURCE="http://nginx.org/download/nginx-$NGINX_VERSION.tar.gz"
+NGINX_SOURCE_DIR="source/nginx"
+NGINX_VENDOR="vendor/nginx"
 
-mkdir -p "$1/config"
+BUILDPACK_DIR=$(cd $(dirname $(dirname $0)); pwd)
+BUILD_DIR=$1
+CACHE_DIR=$2
+CACHE_BUILD_VERSION_FILE="$CACHE_DIR/BUILD_VERSION"
 
-cp config/mime.types "$1/config/"
-echo '-----> nginx-buildpack: Default mime.types copied to app/config/'
-
-if [[ ! -f $1/config/nginx.conf.erb ]]; then
-	cp config/nginx.conf.erb "$1/config/"
-	echo '-----> nginx-buildpack: Default config copied to app/config.'
-else
-	echo '-----> nginx-buildpack: Custom config found in app/config.'
+if [ ! -d $CACHE_DIR ]; then
+  echo "-----> Creating cache dir ($CACHE_DIR) for optimisation of future builds/pushes"
+  mkdir $CACHE_DIR
 fi
-exit 0
+
+function symlink_nginx_binary {
+  cd $BUILD_DIR/bin
+  ln -s ../$NGINX_VENDOR/sbin/nginx $BUILD_DIR/bin/nginx
+  cd $BUILDPACK_DIR
+}
+
+function check_requires_rebuild {
+  echo "-----> Checking environment for presence of installed Nginx"
+
+  # Pre-existing build?
+  if [ -e $CACHE_BUILD_VERSION_FILE ]; then
+    CACHE_BUILD_VERSION=`cat $CACHE_DIR/BUILD_VERSION`
+
+    if [ "$CACHE_BUILD_VERSION" == "$NGINX_VERSION" ]; then
+      echo "-----> Existing and up-to-date app detected (v$CACHE_BUILD_VERSION). No need to re-compile"
+      mkdir -p $BUILD_DIR/vendor
+      cp -r $CACHE_DIR/$NGINX_VENDOR $BUILD_DIR/$NGINX_VENDOR
+      symlink_nginx_binary
+      nginx_configuration_setup
+      echo "-----> Done"
+      exit 0
+    fi
+
+    echo "-----> Existing environment will be modified (from v$CACHE_BUILD_VERSION), installing Nginx v$NGINX_VERSION"
+
+  else
+    echo "-----> New environment detected, installing Nginx v$NGINX_VERSION"
+  fi
+}
+
+function nginx_configuration_setup {
+  cd $BUILDPACK_DIR
+
+  cp $BUILDPACK_DIR/bin/start-nginx $BUILD_DIR/bin/
+  echo '-----> nginx-buildpack: Added start-nginx to app/bin'
+
+  mkdir -p $BUILD_DIR/config
+
+  cp $BUILDPACK_DIR/config/mime.types $BUILD_DIR/config/
+  echo '-----> nginx-buildpack: Default mime.types copied to app/config/'
+
+  if [[ ! -f $BUILD_DIR/config/nginx.conf.erb ]]; then
+    cp $BUILDPACK_DIR/config/nginx.conf.erb $BUILD_DIR/config/
+    echo '-----> nginx-buildpack: Default config copied to app/config.'
+  else
+    echo '-----> nginx-buildpack: Custom config found in app/config.'
+  fi
+}
+
+# Check if source exists, if it does - don't re-build!
+# RECOMPILE_NGINX environment config can be set to override
+if [ "$RECOMPILE_NGINX" == "1" ]; then
+  echo "-----> Explicit re-build requested, re-building"
+else
+  check_requires_rebuild
+fi
+
+# Vendor Nginx
+echo "-----> Downloading nginx"
+echo "$BUILD_DIR/$NGINX_SOURCE_DIR"
+mkdir -p $BUILD_DIR/$NGINX_SOURCE_DIR
+curl $NGINX_SOURCE -o - | tar -xz -C $BUILD_DIR -f -
+
+echo "-----> Compiling nginx"
+cd $BUILD_DIR/nginx-$NGINX_VERSION
+./configure --prefix="$BUILD_DIR/$NGINX_VENDOR" --with-http_gzip_static_module
+make
+make install
+
+# Cache build for future
+echo $NGINX_VERSION > $CACHE_BUILD_VERSION_FILE
+cp -r $BUILD_DIR/$NGINX_VENDOR $CACHE_DIR/$NGINX_VENDOR
+symlink_nginx_binary
+
+nginx_configuration_setup
+
+echo "-----> Done"
