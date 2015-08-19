@@ -1,3 +1,16 @@
+# Unboxeds nginx-buildpack
+
+Uses ryandotsmith/nginx-buildpack as a base but will compile and cache the nginx binary on heroku instead of commiting the nginx binary to this github repo.
+
+Changes:
+
+* Update nginx version to 1.8.0
+* Added --with-http_gzip_static_module (allows use of gzip_static directive)
+* Extend compile script to use a cached binary of ngnix
+* Will recompile nginx if the version changes (see [bin/compile](bin/compile))
+
+Everything else is the same as below
+
 # Heroku Buildpack: NGINX
 
 Nginx-buildpack vendors NGINX inside a dyno and connects NGINX to an app server via UNIX domain sockets.
